@@ -1,0 +1,1876 @@
+
+name: Open World Android Game Builder
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+env:
+  GODOT_VERSION: "4.4.1"
+  PROJECT_NAME: "OpenWorld"
+  APK_NAME: "OpenWorld-Android.apk"
+
+jobs:
+  build:
+    name: Build 3D Open World Android
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Project
+        uses: actions/checkout@v4
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget unzip zip openjdk-17-jdk
+
+      - name: Download Godot Engine
+        run: |
+          wget -q https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
+          unzip -q Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
+          chmod +x Godot_v${GODOT_VERSION}-stable_linux.x86_64
+          sudo mv Godot_v${GODOT_VERSION}-stable_linux.x86_64 /usr/local/bin/godot
+
+      - name: Create Game Project
+        run: |
+          mkdir -p game/scenes
+          mkdir -p game/scripts
+          mkdir -p game/assets
+          mkdir -p build
+
+      - name: Configure Project
+        run: |
+          cat > game/project.godot <<'EOF'
+          config_version=5
+
+          [application]
+          config/name="Open World"
+          config/description="3D Open World Android Action Game"
+          run/main_scene="res://scenes/main.tscn"
+
+          [rendering]
+          renderer/rendering_method="gl_compatibility"
+          renderer/rendering_method.mobile="gl_compatibility"
+          textures/default_filters/use_nearest_mipmap_filter=false
+          environment/defaults/default_clear_color=Color(0.35,0.48,0.57,1)
+
+          [physics]
+          3d/default_gravity=9.8
+
+          [display]
+          window/size/viewport_width=1280
+          window/size/viewport_height=720
+          window/handheld/orientation=1
+          EOF
+
+      - name: Initialize Game Engine
+        run: |
+          cd game
+          godot --headless --editor --path . --quit
+
+      - name: Create 3D Game Scene
+        run: |
+          cat > game/scenes/main.tscn <<'EOF'
+          [gd_scene load_steps=3 format=3]
+
+          [ext_resource type="Script" path="res://scripts/main.gd" id="1"]
+
+          [sub_resource type="Environment" id="Environment_world"]
+          background_mode = 1
+          background_color = Color(0.48,0.65,0.76,1)
+          ambient_light_source = 3
+          ambient_light_color = Color(0.75,0.82,0.91,1)
+          ambient_light_energy = 0.8
+          tonemap_mode = 2
+          glow_enabled = true
+          glow_intensity = 0.3
+
+          [node name="Main" type="Node3D"]
+          script = ExtResource("1")
+
+          [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+          environment = SubResource("Environment_world")
+
+          [node name="Sun" type="DirectionalLight3D" parent="."]
+          rotation_degrees = Vector3(-48,-32,0)
+          light_color = Color(1,0.91,0.78,1)
+          light_energy = 1.3
+          shadow_enabled = true
+          directional_shadow_max_distance = 120.0
+          EOF
+
+      - name: Create Game Engine Script
+        run: |
+          cat > game/scripts/main.gd <<'EOF'
+          extends Node3D
+
+          const WORLD_SIZE = 500.0
+          const ROAD_WIDTH = 20.0
+
+          var player: CharacterBody3D
+          var camera: Camera3D
+          var world_material: StandardMaterial3D
+
+          func _ready():
+              create_world()
+              create_player()
+              create_camera()
+              print("OPEN WORLD INITIALIZED")
+
+          func create_material(color: Color, roughness: float = 0.8):
+              var material = StandardMaterial3D.new()
+              material.albedo_color = color
+              material.roughness = roughness
+              return material
+
+          func create_box(size: Vector3, material: Material, position: Vector3):
+              var mesh = BoxMesh.new()
+              mesh.size = size
+
+              var instance = MeshInstance3D.new()
+              instance.mesh = mesh
+              instance.material_override = material
+              instance.position = position
+              instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+              add_child(instance)
+              return instance
+
+          func create_world():
+              world_material = create_material(Color(0.19,0.29,0.23))
+              create_box(
+                  Vector3(WORLD_SIZE,1,WORLD_SIZE),
+                  world_material,
+                  Vector3(0,-0.6,0)
+              )
+
+              var road_material = create_material(Color(0.12,0.13,0.14))
+              var line_material = create_material(Color(0.92,0.83,0.55))
+
+              for i in range(-200,201,80):
+                  create_box(
+                      Vector3(WORLD_SIZE,0.12,ROAD_WIDTH),
+                      road_material,
+                      Vector3(0,0,i)
+                  )
+
+                  create_box(
+                      Vector3(ROAD_WIDTH,0.12,WORLD_SIZE),
+                      road_material,
+                      Vector3(i,0,0)
+                  )
+
+              print("WORLD TERRAIN CREATED")
+
+          EOF
+
+      - name: Create Detailed City Buildings
+        run: |
+          cat >> game/scripts/main.gd <<'EOF'
+
+          func create_building(position: Vector3, width: float, depth: float, height: float, color: Color):
+              var building = Node3D.new()
+              building.position = position
+              add_child(building)
+
+              var wall_material = create_material(color, 0.75)
+              var glass_material = StandardMaterial3D.new()
+              glass_material.albedo_color = Color(0.12,0.25,0.32)
+              glass_material.metallic = 0.45
+              glass_material.roughness = 0.2
+
+              var body_mesh = BoxMesh.new()
+              body_mesh.size = Vector3(width,height,depth)
+
+              var body = MeshInstance3D.new()
+              body.mesh = body_mesh
+              body.position.y = height * 0.5
+              body.material_override = wall_material
+              body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+              building.add_child(body)
+
+              var window_mesh = BoxMesh.new()
+              window_mesh.size = Vector3(1.35,1.5,0.12)
+
+              var floors = int(height / 3.5)
+              var columns = int(width / 3.5)
+
+              for floor in range(1,floors):
+                  for column in range(columns):
+                      var window = MeshInstance3D.new()
+                      window.mesh = window_mesh
+                      window.material_override = glass_material
+
+                      var wx = -width * 0.5 + 2.0 + column * 3.3
+                      var wy = floor * 3.5
+
+                      window.position = Vector3(wx,wy,depth * 0.5 + 0.08)
+                      building.add_child(window)
+
+                      var opposite = window.duplicate()
+                      opposite.position.z = -depth * 0.5 - 0.08
+                      building.add_child(opposite)
+
+              var roof = MeshInstance3D.new()
+              var roof_mesh = BoxMesh.new()
+              roof_mesh.size = Vector3(width + 0.5,0.4,depth + 0.5)
+              roof.mesh = roof_mesh
+              roof.material_override = create_material(Color(0.16,0.18,0.19))
+              roof.position.y = height + 0.2
+              building.add_child(roof)
+
+              return building
+
+          func create_city():
+              var colors = [
+                  Color(0.64,0.65,0.62),
+                  Color(0.48,0.54,0.57),
+                  Color(0.72,0.66,0.56),
+                  Color(0.39,0.46,0.49),
+                  Color(0.76,0.73,0.66)
+              ]
+
+              var rng = RandomNumberGenerator.new()
+              rng.randomize()
+
+              for x in range(-220,221,40):
+                  for z in range(-220,221,40):
+
+                      if abs(x % 80) < 24 or abs(z % 80) < 24:
+                          continue
+
+                      var width = rng.randf_range(18,29)
+                      var depth = rng.randf_range(18,29)
+                      var height = rng.randf_range(15,65)
+                      var color = colors[rng.randi_range(0,colors.size()-1)]
+
+                      create_building(
+                          Vector3(
+                              x + rng.randf_range(-4,4),
+                              0,
+                              z + rng.randf_range(-4,4)
+                          ),
+                          width,
+                          depth,
+                          height,
+                          color
+                      )
+
+              print("CITY BUILDINGS CREATED")
+
+          EOF
+
+      - name: Activate City Generation
+        run: |
+          python3 - <<'PY'
+          path = "game/scripts/main.gd"
+          with open(path, "r") as f:
+              code = f.read()
+          code = code.replace(
+              "create_world()\n              create_player()",
+              "create_world()\n              create_city()\n              create_player()"
+          )
+          with open(path, "w") as f:
+              f.write(code)
+          PY
+
+      - name: Create Player Character
+        run: |
+          cat >> game/scripts/main.gd <<'EOF'
+
+          var player_material: StandardMaterial3D
+          var skin_material: StandardMaterial3D
+          var clothes_material: StandardMaterial3D
+
+          func create_player():
+              player = CharacterBody3D.new()
+              player.name = "Player"
+              player.position = Vector3(0,1,0)
+              player.collision_layer = 1
+              player.collision_mask = 1
+              add_child(player)
+
+              var capsule = CapsuleShape3D.new()
+              capsule.radius = 0.42
+              capsule.height = 1.85
+
+              var collision = CollisionShape3D.new()
+              collision.shape = capsule
+              collision.position.y = 0.95
+              player.add_child(collision)
+
+              player_material = create_material(Color(0.12,0.16,0.19))
+              skin_material = create_material(Color(0.72,0.49,0.34))
+              clothes_material = create_material(Color(0.18,0.25,0.32))
+
+              var visual = Node3D.new()
+              visual.name = "CharacterVisual"
+              player.add_child(visual)
+
+              create_character_part(
+                  visual,
+                  Vector3(0,1.35,0),
+                  Vector3(0.58,0.72,0.32),
+                  clothes_material
+              )
+
+              create_character_part(
+                  visual,
+                  Vector3(0,1.94,0),
+                  Vector3(0.38,0.42,0.38),
+                  skin_material
+              )
+
+              create_character_part(
+                  visual,
+                  Vector3(0,2.17,-0.015),
+                  Vector3(0.43,0.13,0.4),
+                  player_material
+              )
+
+              for side in [-1,1]:
+                  create_character_part(
+                      visual,
+                      Vector3(side * 0.39,1.38,0),
+                      Vector3(0.2,0.7,0.22),
+                      clothes_material
+                  )
+
+                  create_character_part(
+                      visual,
+                      Vector3(side * 0.39,1.0,0),
+                      Vector3(0.18,0.22,0.2),
+                      skin_material
+                  )
+
+                  create_character_part(
+                      visual,
+                      Vector3(side * 0.16,0.58,0),
+                      Vector3(0.23,0.78,0.25),
+                      player_material
+                  )
+
+                  create_character_part(
+                      visual,
+                      Vector3(side * 0.16,0.14,-0.07),
+                      Vector3(0.25,0.22,0.42),
+                      player_material
+                  )
+
+              create_character_part(
+                  visual,
+                  Vector3(0,0.95,0.2),
+                  Vector3(0.5,0.13,0.12),
+                  skin_material
+              )
+
+              print("PLAYER CHARACTER CREATED")
+
+          func create_character_part(parent: Node3D, pos: Vector3, dimensions: Vector3, material: Material):
+              var mesh = CapsuleMesh.new()
+              mesh.radius = min(dimensions.x,dimensions.z) * 0.5
+              mesh.height = max(dimensions.y,mesh.radius * 2.0)
+
+              var part = MeshInstance3D.new()
+              part.mesh = mesh
+              part.material_override = material
+              part.position = pos
+              part.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+              parent.add_child(part)
+              return part
+
+          var player_speed = 6.0
+          var sprint_speed = 10.0
+          var gravity = 9.8
+
+          func _physics_process(delta):
+              if player == null:
+                  return
+
+              var direction = Vector3.ZERO
+
+              if Input.is_key_pressed(KEY_W):
+                  direction.z -= 1
+              if Input.is_key_pressed(KEY_S):
+                  direction.z += 1
+              if Input.is_key_pressed(KEY_A):
+                  direction.x -= 1
+              if Input.is_key_pressed(KEY_D):
+                  direction.x += 1
+
+              direction = direction.normalized()
+
+              var speed = sprint_speed if Input.is_key_pressed(KEY_SHIFT) else player_speed
+
+              if direction.length() > 0:
+                  player.velocity.x = direction.x * speed
+                  player.velocity.z = direction.z * speed
+
+                  player.rotation.y = lerp_angle(
+                      player.rotation.y,
+                      atan2(direction.x,direction.z),
+                      delta * 9.0
+                  )
+              else:
+                  player.velocity.x = move_toward(player.velocity.x,0,20*delta)
+                  player.velocity.z = move_toward(player.velocity.z,0,20*delta)
+
+              if not player.is_on_floor():
+                  player.velocity.y -= gravity * delta
+              else:
+                  if Input.is_key_pressed(KEY_SPACE):
+                      player.velocity.y = 5.5
+
+              player.move_and_slide()
+
+          EOF
+
+      - name: Create Third Person Camera
+        run: |
+          cat >> game/scripts/main.gd <<'EOF'
+
+          func create_camera():
+              camera = Camera3D.new()
+              camera.name = "ThirdPersonCamera"
+              camera.fov = 72
+              camera.near = 0.1
+              camera.far = 900
+              camera.current = true
+              add_child(camera)
+
+              camera.position = Vector3(0,5,10)
+              camera.look_at(Vector3.ZERO,Vector3.UP)
+
+              print("THIRD PERSON CAMERA CREATED")
+
+          func update_camera(delta):
+              if player == null or camera == null:
+                  return
+
+              var target = player.global_position + Vector3(0,2.2,0)
+              var behind = player.global_transform.basis.z.normalized()
+              var desired = target + behind * 7.0 + Vector3(0,2.2,0)
+
+              camera.global_position = camera.global_position.lerp(
+                  desired,
+                  1.0 - exp(-5.0 * delta)
+              )
+
+              camera.look_at(target,Vector3.UP)
+
+          func _process(delta):
+              update_camera(delta)
+
+          EOF
+
+      - name: Create Detailed Sports Vehicle System
+        run: |
+          cat >> game/scripts/main.gd <<'EOF'
+
+          var vehicle: CharacterBody3D
+          var vehicle_model: Node3D
+          var vehicle_active = false
+          var vehicle_speed = 0.0
+          var vehicle_max_speed = 38.0
+          var vehicle_acceleration = 19.0
+          var vehicle_steering = 0.0
+          var vehicle_wheels = []
+
+          func create_vehicle():
+              vehicle = CharacterBody3D.new()
+              vehicle.name = "SportsCar"
+              vehicle.position = Vector3(5,0.65,5)
+              vehicle.collision_layer = 1
+              vehicle.collision_mask = 1
+              add_child(vehicle)
+
+              var shape = BoxShape3D.new()
+              shape.size = Vector3(2.1,1.25,4.4)
+
+              var collision = CollisionShape3D.new()
+              collision.shape = shape
+              collision.position.y = 0.15
+              vehicle.add_child(collision)
+
+              vehicle_model = Node3D.new()
+              vehicle.add_child(vehicle_model)
+
+              var paint = StandardMaterial3D.new()
+              paint.albedo_color = Color(0.65,0.045,0.025)
+              paint.metallic = 0.78
+              paint.roughness = 0.24
+
+              var glass = StandardMaterial3D.new()
+              glass.albedo_color = Color(0.035,0.12,0.17)
+              glass.metallic = 0.55
+              glass.roughness = 0.15
+
+              var rubber = create_material(Color(0.025,0.027,0.03),0.95)
+              var chrome = create_material(Color(0.65,0.68,0.7),0.2)
+
+              create_car_shape(
+                  Vector3(0,0,0),
+                  Vector3(2.0,0.65,4.2),
+                  paint
+              )
+
+              create_car_shape(
+                  Vector3(0,0.55,-0.15),
+                  Vector3(1.65,0.85,2.15),
+                  paint
+              )
+
+              create_car_shape(
+                  Vector3(0,0.85,-0.15),
+                  Vector3(1.5,0.55,1.85),
+                  glass
+              )
+
+              for side in [-1,1]:
+                  for front in [-1,1]:
+                      var wheel = MeshInstance3D.new()
+                      var wheel_mesh = CylinderMesh.new()
+                      wheel_mesh.top_radius = 0.42
+                      wheel_mesh.bottom_radius = 0.42
+                      wheel_mesh.height = 0.28
+                      wheel.mesh = wheel_mesh
+                      wheel.material_override = rubber
+                      wheel.rotation.z = PI / 2
+                      wheel.position = Vector3(
+                          side * 1.02,
+                          -0.17,
+                          front * 1.35
+                      )
+                      vehicle_model.add_child(wheel)
+                      vehicle_wheels.append(wheel)
+
+                      var rim = MeshInstance3D.new()
+                      var rim_mesh = CylinderMesh.new()
+                      rim_mesh.top_radius = 0.22
+                      rim_mesh.bottom_radius = 0.22
+                      rim_mesh.height = 0.3
+                      rim.mesh = rim_mesh
+                      rim.material_override = chrome
+                      rim.rotation.z = PI / 2
+                      rim.position = wheel.position
+                      vehicle_model.add_child(rim)
+
+              var headlight_material = StandardMaterial3D.new()
+              headlight_material.albedo_color = Color(1,0.95,0.72)
+              headlight_material.emission_enabled = true
+              headlight_material.emission = Color(1,0.8,0.45)
+              headlight_material.emission_energy_multiplier = 1.5
+
+              for side in [-1,1]:
+                  create_car_shape(
+                      Vector3(side*0.68,0.13,2.12),
+                      Vector3(0.48,0.2,0.08),
+                      headlight_material
+                  )
+
+              var tail_material = StandardMaterial3D.new()
+              tail_material.albedo_color = Color(0.8,0.015,0.01)
+              tail_material.emission_enabled = true
+              tail_material.emission = Color(0.8,0.01,0.005)
+
+              for side in [-1,1]:
+                  create_car_shape(
+                      Vector3(side*0.68,0.13,-2.12),
+                      Vector3(0.48,0.2,0.08),
+                      tail_material
+                  )
+
+              print("SPORTS VEHICLE CREATED")
+
+          func create_car_shape(pos: Vector3, size: Vector3, material: Material):
+              var mesh = BoxMesh.new()
+              mesh.size = size
+
+              var instance = MeshInstance3D.new()
+              instance.mesh = mesh
+              instance.material_override = material
+              instance.position = pos
+              vehicle_model.add_child(instance)
+              return instance
+
+          func enter_exit_vehicle():
+              if vehicle == null:
+                  return
+
+              if vehicle_active:
+                  vehicle_active = false
+                  player.visible = true
+                  player.position = vehicle.position + Vector3(2,0,0)
+                  player.velocity = Vector3.ZERO
+              else:
+                  if player.global_position.distance_to(vehicle.global_position) < 4.0:
+                      vehicle_active = true
+                      player.visible = false
+                      player.velocity = Vector3.ZERO
+
+          func update_vehicle_input(delta):
+              if not vehicle_active:
+                  return
+
+              var acceleration_input = 0.0
+              var steering_input = 0.0
+
+              if Input.is_key_pressed(KEY_W):
+                  acceleration_input += 1.0
+              if Input.is_key_pressed(KEY_S):
+                  acceleration_input -= 1.0
+              if Input.is_key_pressed(KEY_A):
+                  steering_input += 1.0
+              if Input.is_key_pressed(KEY_D):
+                  steering_input -= 1.0
+
+              vehicle_speed = move_toward(
+                  vehicle_speed,
+                  acceleration_input * vehicle_max_speed,
+                  vehicle_acceleration * delta
+              )
+
+              vehicle_steering = move_toward(
+                  vehicle_steering,
+                  steering_input,
+                  delta * 3.0
+              )
+
+              vehicle.rotation.y += (
+                  vehicle_steering *
+                  vehicle_speed / vehicle_max_speed *
+                  1.7 * delta
+              )
+
+              var forward = -vehicle.global_transform.basis.z
+
+              vehicle.velocity.x = forward.x * vehicle_speed
+              vehicle.velocity.z = forward.z * vehicle_speed
+              vehicle.velocity.y -= 9.8 * delta
+
+              vehicle.move_and_slide()
+
+              for wheel in vehicle_wheels:
+                  wheel.rotate_object_local(Vector3.RIGHT,vehicle_speed*delta*2.0)
+
+          EOF
+
+      - name: Connect Vehicle To Game
+        run: |
+          python3 - <<'PY'
+          p="game/scripts/main.gd"
+          s=open(p).read()
+          s=s.replace(
+              "create_camera()\n              print",
+              "create_camera()\n              create_vehicle()\n              print"
+          )
+          s=s.replace(
+              "if player == null:\n                  return\n\n              var direction",
+              "if player == null:\n                  return\n\n              if vehicle_active:\n                  update_vehicle_input(delta)\n                  return\n\n              var direction"
+          )
+          s=s.replace(
+              "func _process(delta):\n              update_camera(delta)",
+              "func _process(delta):\n              update_camera(delta)\n              if Input.is_action_just_pressed(\"interact\"):\n                  enter_exit_vehicle()"
+          )
+          s += """
+          func _unhandled_key_input(event):
+              if event is InputEventKey and event.pressed and not event.echo:
+                  if event.keycode == KEY_E:
+                      enter_exit_vehicle()
+          """
+          open(p,"w").write(s)
+          PY
+
+      - name: Add Mobile Controls And Physics
+        run: |
+          cat >> game/scripts/main.gd <<'EOF'
+
+          var mobile_ui: CanvasLayer
+          var mobile_buttons = {}
+          var mobile_input = {
+              "forward": false,
+              "backward": false,
+              "left": false,
+              "right": false,
+              "sprint": false
+          }
+
+          var mobile_jump = false
+          var mobile_interact = false
+
+          func create_mobile_controls():
+              mobile_ui = CanvasLayer.new()
+              mobile_ui.name = "MobileControls"
+              add_child(mobile_ui)
+
+              var panel = Control.new()
+              panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+              panel.mouse_filter = Control.MOUSE_FILTER_PASS
+              mobile_ui.add_child(panel)
+
+              var controls = [
+                  ["forward","▲",Vector2(115, -190),Vector2(65,65)],
+                  ["backward","▼",Vector2(115,-55),Vector2(65,65)],
+                  ["left","◀",Vector2(45,-122),Vector2(65,65)],
+                  ["right","▶",Vector2(185,-122),Vector2(65,65)],
+                  ["sprint","RUN",Vector2(-110,-195),Vector2(85,65)]
+              ]
+
+              for item in controls:
+                  var button = Button.new()
+                  button.text = item[1]
+                  button.custom_minimum_size = item[3]
+                  button.position = Vector2(0,0)
+                  button.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+                  button.position = item[2]
+                  button.add_theme_font_size_override("font_size",20)
+                  button.add_theme_color_override("font_color",Color.WHITE)
+                  button.add_theme_color_override("font_hover_color",Color.WHITE)
+                  button.add_theme_stylebox_override(
+                      "normal",
+                      make_button_style(Color(0.08,0.13,0.17,0.75))
+                  )
+                  button.add_theme_stylebox_override(
+                      "pressed",
+                      make_button_style(Color(0.25,0.5,0.55,0.9))
+                  )
+
+                  button.button_down.connect(
+                      func(): mobile_input[item[0]] = true
+                  )
+                  button.button_up.connect(
+                      func(): mobile_input[item[0]] = false
+                  )
+
+                  panel.add_child(button)
+                  mobile_buttons[item[0]] = button
+
+              add_action_button(panel,"JUMP",Vector2(-105,-110),"jump")
+              add_action_button(panel,"ACTION",Vector2(-105,-35),"interact")
+
+          func make_button_style(color: Color):
+              var style = StyleBoxFlat.new()
+              style.bg_color = color
+              style.corner_radius_top_left = 18
+              style.corner_radius_top_right = 18
+              style.corner_radius_bottom_left = 18
+              style.corner_radius_bottom_right = 18
+              style.border_width_left = 1
+              style.border_width_right = 1
+              style.border_width_top = 1
+              style.border_width_bottom = 1
+              style.border_color = Color(0.8,0.85,0.9,0.5)
+              return style
+
+          func add_action_button(parent: Control, title: String, pos: Vector2, action: String):
+              var button = Button.new()
+              button.text = title
+              button.custom_minimum_size = Vector2(95,60)
+              button.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+              button.position = pos
+              button.add_theme_font_size_override("font_size",15)
+              button.add_theme_color_override("font_color",Color.WHITE)
+              button.add_theme_stylebox_override(
+                  "normal",
+                  make_button_style(Color(0.1,0.2,0.25,0.8))
+              )
+
+              if action == "jump":
+                  button.button_down.connect(func(): mobile_jump = true)
+                  button.button_up.connect(func(): mobile_jump = false)
+              else:
+                  button.pressed.connect(func(): mobile_interact = true)
+
+              parent.add_child(button)
+
+          func update_mobile_input():
+              var direction = Vector3.ZERO
+
+              if mobile_input.forward:
+                  direction.z -= 1
+              if mobile_input.backward:
+                  direction.z += 1
+              if mobile_input.left:
+                  direction.x -= 1
+              if mobile_input.right:
+                  direction.x += 1
+
+              return direction.normalized()
+
+          func add_ground_collision():
+              var body = StaticBody3D.new()
+              body.name = "GroundCollision"
+
+              var shape = BoxShape3D.new()
+              shape.size = Vector3(WORLD_SIZE,1,WORLD_SIZE)
+
+              var collision = CollisionShape3D.new()
+              collision.shape = shape
+              collision.position.y = -0.55
+
+              body.add_child(collision)
+              add_child(body)
+
+          func activate_mobile_system():
+              add_ground_collision()
+              create_mobile_controls()
+              print("MOBILE CONTROLS READY")
+
+          EOF
+
+      - name: Integrate Mobile System
+        run: |
+          python3 - <<'PY'
+          p = "game/scripts/main.gd"
+          s = open(p).read()
+
+          s = s.replace(
+              "create_vehicle()\n              print",
+              "create_vehicle()\n              activate_mobile_system()\n              print"
+          )
+
+          s = s.replace(
+              "var direction = Vector3.ZERO\n\n              if Input.is_key_pressed(KEY_W):",
+              "var direction = update_mobile_input()\n\n              if Input.is_key_pressed(KEY_W):"
+          )
+
+          s = s.replace(
+              "if Input.is_key_pressed(KEY_SHIFT) else player_speed",
+              "if (Input.is_key_pressed(KEY_SHIFT) or mobile_input.sprint) else player_speed"
+          )
+
+          s = s.replace(
+              "if Input.is_key_pressed(KEY_SPACE):",
+              "if Input.is_key_pressed(KEY_SPACE) or mobile_jump:"
+          )
+
+          s = s.replace(
+              "if Input.is_action_just_pressed(\"interact\"):",
+              "if mobile_interact:\n                  mobile_interact = false\n                  enter_exit_vehicle()\n              if Input.is_key_pressed(KEY_E):"
+          )
+
+          s = s.replace(
+              "if Input.is_key_pressed(KEY_W):\n                  acceleration_input += 1.0",
+              "if Input.is_key_pressed(KEY_W) or mobile_input.forward:\n                  acceleration_input += 1.0"
+          )
+
+          s = s.replace(
+              "if Input.is_key_pressed(KEY_S):\n                  acceleration_input -= 1.0",
+              "if Input.is_key_pressed(KEY_S) or mobile_input.backward:\n                  acceleration_input -= 1.0"
+          )
+
+          s = s.replace(
+              "if Input.is_key_pressed(KEY_A):\n                  steering_input += 1.0",
+              "if Input.is_key_pressed(KEY_A) or mobile_input.left:\n                  steering_input += 1.0"
+          )
+
+          s = s.replace(
+              "if Input.is_key_pressed(KEY_D):\n                  steering_input -= 1.0",
+              "if Input.is_key_pressed(KEY_D) or mobile_input.right:\n                  steering_input -= 1.0"
+          )
+
+          open(p,"w").write(s)
+          PY
+
+      - name: Create Weapon And Combat System
+        run: |
+          cat >> game/scripts/main.gd <<'EOF'
+
+          var weapon_root: Node3D
+          var weapon_ready = true
+          var weapon_damage = 35.0
+          var weapon_range = 100.0
+          var ammo = 30
+          var reserve_ammo = 120
+          var shooting = false
+          var reloading = false
+          var shoot_cooldown = 0.0
+
+          func create_weapon_system():
+              weapon_root = Node3D.new()
+              weapon_root.name = "AssaultRifle"
+              weapon_root.position = Vector3(0.35,1.35,-0.55)
+              player.get_node("CharacterVisual").add_child(weapon_root)
+
+              var metal = StandardMaterial3D.new()
+              metal.albedo_color = Color(0.12,0.14,0.16)
+              metal.metallic = 0.85
+              metal.roughness = 0.3
+
+              var polymer = create_material(Color(0.16,0.12,0.09),0.7)
+              var barrel_material = create_material(Color(0.055,0.06,0.065),0.3)
+
+              weapon_part(weapon_root,Vector3(0,0,0),Vector3(0.11,0.13,0.55),metal)
+              weapon_part(weapon_root,Vector3(0,0.02,-0.42),Vector3(0.065,0.065,0.48),barrel_material)
+              weapon_part(weapon_root,Vector3(0,-0.12,-0.03),Vector3(0.13,0.25,0.17),polymer)
+              weapon_part(weapon_root,Vector3(0,-0.22,0.18),Vector3(0.12,0.34,0.13),polymer)
+              weapon_part(weapon_root,Vector3(0,0.12,0.08),Vector3(0.07,0.12,0.24),metal)
+              weapon_part(weapon_root,Vector3(0,0.15,-0.42),Vector3(0.045,0.045,0.14),metal)
+
+              var muzzle = weapon_part(
+                  weapon_root,
+                  Vector3(0,0,-0.68),
+                  Vector3(0.09,0.09,0.12),
+                  metal
+              )
+              weapon_root.visible = true
+
+              print("WEAPON SYSTEM READY")
+
+          func weapon_part(parent: Node3D,pos: Vector3,size: Vector3,material: Material):
+              var mesh = BoxMesh.new()
+              mesh.size = size
+
+              var part = MeshInstance3D.new()
+              part.mesh = mesh
+              part.material_override = material
+              part.position = pos
+              parent.add_child(part)
+              return part
+
+          func fire_weapon():
+              if not weapon_ready or reloading or ammo <= 0:
+                  return
+
+              weapon_ready = false
+              ammo -= 1
+              shoot_cooldown = 0.16
+
+              if weapon_root:
+                  weapon_root.position.z = -0.35
+
+              var origin = camera.global_position
+              var direction = -camera.global_transform.basis.z
+
+              var query = PhysicsRayQueryParameters3D.create(
+                  origin,
+                  origin + direction * weapon_range
+              )
+
+              query.exclude = [player.get_rid()]
+              var result = get_world_3d().direct_space_state.intersect_ray(query)
+
+              if not result.is_empty():
+                  var hit = result.collider
+
+                  if hit.has_method("take_damage"):
+                      hit.take_damage(weapon_damage)
+
+              print("SHOT FIRED | AMMO: ",ammo)
+
+          func reload_weapon():
+              if reloading or ammo >= 30 or reserve_ammo <= 0:
+                  return
+
+              reloading = true
+              await get_tree().create_timer(1.8).timeout
+
+              var needed = 30 - ammo
+              var amount = min(needed,reserve_ammo)
+
+              ammo += amount
+              reserve_ammo -= amount
+              reloading = false
+
+              print("WEAPON RELOADED")
+
+          func update_weapon(delta):
+              shoot_cooldown = max(0.0,shoot_cooldown-delta)
+
+              if shoot_cooldown <= 0.0:
+                  weapon_ready = true
+
+              if weapon_root:
+                  weapon_root.position.z = lerp(
+                      weapon_root.position.z,
+                      -0.55,
+                      delta * 12.0
+                  )
+
+          func weapon_input():
+              if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+                  if shoot_cooldown <= 0.0:
+                      fire_weapon()
+
+              if Input.is_key_pressed(KEY_R):
+                  if not reloading:
+                      reload_weapon()
+
+          func _input(event):
+              if event is InputEventScreenTouch and event.pressed:
+                  if event.position.x > get_viewport().size.x * 0.55:
+                      if event.position.y < get_viewport().size.y * 0.65:
+                          fire_weapon()
+
+              if event is InputEventKey and event.pressed and not event.echo:
+                  if event.keycode == KEY_R:
+                      reload_weapon()
+
+          EOF
+
+      - name: Integrate Weapon System
+        run: |
+          python3 - <<'PY'
+          p = "game/scripts/main.gd"
+          s = open(p).read()
+
+          s = s.replace(
+              "create_player()\n              create_camera()",
+              "create_player()\n              create_weapon_system()\n              create_camera()"
+          )
+
+          s = s.replace(
+              "func _process(delta):\n              update_camera(delta)",
+              "func _process(delta):\n              update_camera(delta)\n              update_weapon(delta)\n              weapon_input()"
+          )
+
+          open(p,"w").write(s)
+          PY
+
+      - name: Create Police And Wanted System
+        run: |
+          cat >> game/scripts/main.gd <<'EOF'
+
+          var wanted_level = 0
+          var police_units = []
+          var police_spawn_timer = 0.0
+          var police_spawn_interval = 12.0
+          var wanted_decay_timer = 0.0
+
+          func increase_wanted(amount: int = 1):
+              wanted_level = clampi(wanted_level + amount,0,5)
+              wanted_decay_timer = 0.0
+              print("WANTED LEVEL: ",wanted_level)
+
+          func reduce_wanted():
+              wanted_level = max(0,wanted_level-1)
+              print("WANTED LEVEL REDUCED: ",wanted_level)
+
+          func create_police_officer(position: Vector3):
+              var officer = CharacterBody3D.new()
+              officer.name = "PoliceOfficer"
+              officer.position = position
+              officer.collision_layer = 1
+              officer.collision_mask = 1
+              add_child(officer)
+
+              var capsule = CapsuleShape3D.new()
+              capsule.radius = 0.4
+              capsule.height = 1.8
+
+              var collision = CollisionShape3D.new()
+              collision.shape = capsule
+              collision.position.y = 0.9
+              officer.add_child(collision)
+
+              var uniform = create_material(Color(0.035,0.075,0.19))
+              var skin = create_material(Color(0.65,0.43,0.31))
+              var badge = create_material(Color(0.85,0.67,0.2),0.3)
+
+              create_character_part(
+                  officer,
+                  Vector3(0,1.3,0),
+                  Vector3(0.6,0.7,0.35),
+                  uniform
+              )
+
+              create_character_part(
+                  officer,
+                  Vector3(0,1.9,0),
+                  Vector3(0.38,0.4,0.38),
+                  skin
+              )
+
+              create_character_part(
+                  officer,
+                  Vector3(0,2.13,0),
+                  Vector3(0.42,0.13,0.4),
+                  uniform
+              )
+
+              create_character_part(
+                  officer,
+                  Vector3(0.31,1.48,0.19),
+                  Vector3(0.12,0.16,0.05),
+                  badge
+              )
+
+              for side in [-1,1]:
+                  create_character_part(
+                      officer,
+                      Vector3(side*0.38,1.35,0),
+                      Vector3(0.2,0.65,0.22),
+                      uniform
+                  )
+
+                  create_character_part(
+                      officer,
+                      Vector3(side*0.15,0.55,0),
+                      Vector3(0.22,0.8,0.25),
+                      uniform
+                  )
+
+              officer.set_meta("health",100.0)
+              officer.set_meta("attack_timer",0.0)
+
+              officer.set_script(load("res://scripts/police.gd")) if false else null
+
+              police_units.append(officer)
+              return officer
+
+          func spawn_police():
+              if wanted_level <= 0:
+                  return
+
+              var count = mini(wanted_level,5)
+
+              for i in range(count):
+                  if police_units.size() >= 10:
+                      break
+
+                  var angle = randf() * TAU
+                  var distance = randf_range(25,40)
+
+                  var spawn_position = player.global_position + Vector3(
+                      cos(angle)*distance,
+                      1,
+                      sin(angle)*distance
+                  )
+
+                  create_police_officer(spawn_position)
+
+              print("POLICE UNITS DEPLOYED")
+
+          func update_police(delta):
+              if player == null:
+                  return
+
+              police_spawn_timer += delta
+              wanted_decay_timer += delta
+
+              if wanted_level > 0 and police_spawn_timer >= police_spawn_interval:
+                  police_spawn_timer = 0.0
+                  spawn_police()
+
+              if wanted_level > 0 and police_units.is_empty():
+                  if wanted_decay_timer > 35.0:
+                      reduce_wanted()
+                      wanted_decay_timer = 0.0
+
+              for officer in police_units.duplicate():
+                  if not is_instance_valid(officer):
+                      police_units.erase(officer)
+                      continue
+
+                  var distance = officer.global_position.distance_to(
+                      player.global_position
+                  )
+
+                  if distance > 180:
+                      police_units.erase(officer)
+                      officer.queue_free()
+                      continue
+
+                  var direction = (
+                      player.global_position - officer.global_position
+                  )
+
+                  direction.y = 0
+
+                  if direction.length() > 1.8:
+                      direction = direction.normalized()
+
+                      officer.velocity.x = direction.x * 4.2
+                      officer.velocity.z = direction.z * 4.2
+
+                      officer.rotation.y = lerp_angle(
+                          officer.rotation.y,
+                          atan2(direction.x,direction.z),
+                          delta*4.0
+                      )
+                  else:
+                      officer.velocity.x = move_toward(
+                          officer.velocity.x,0,12*delta
+                      )
+                      officer.velocity.z = move_toward(
+                          officer.velocity.z,0,12*delta
+                      )
+
+                  if not officer.is_on_floor():
+                      officer.velocity.y -= gravity*delta
+
+                  officer.move_and_slide()
+
+                  var attack_timer = officer.get_meta("attack_timer",0.0)
+                  attack_timer += delta
+
+                  if distance < 2.0 and attack_timer >= 1.2:
+                      attack_timer = 0.0
+                      take_player_damage(8.0)
+
+                  officer.set_meta("attack_timer",attack_timer)
+
+          var player_health = 100.0
+
+          func take_player_damage(amount: float):
+              player_health = max(0.0,player_health-amount)
+
+              if player_health <= 0:
+                  respawn_player()
+
+          func respawn_player():
+              player_health = 100.0
+              wanted_level = 0
+
+              for officer in police_units:
+                  if is_instance_valid(officer):
+                      officer.queue_free()
+
+              police_units.clear()
+
+              if vehicle_active:
+                  vehicle_active = false
+                  vehicle_speed = 0.0
+                  player.visible = true
+
+              player.global_position = Vector3(0,2,0)
+              player.velocity = Vector3.ZERO
+
+              print("PLAYER RESPAWNED")
+
+          EOF
+
+      - name: Integrate Police System
+        run: |
+          python3 - <<'PY'
+          p = "game/scripts/main.gd"
+          s = open(p).read()
+
+          s = s.replace(
+              "update_camera(delta)\n              update_weapon(delta)",
+              "update_camera(delta)\n              update_police(delta)\n              update_weapon(delta)"
+          )
+
+          s = s.replace(
+              "ammo -= 1\n              shoot_cooldown",
+              "ammo -= 1\n              increase_wanted(1)\n              shoot_cooldown"
+          )
+
+          open(p,"w").write(s)
+          PY
+
+      - name: Create Missions And Economy System
+        run: |
+          cat >> game/scripts/main.gd <<'EOF'
+
+          var player_money = 2500
+          var mission_active = false
+          var mission_completed = 0
+          var mission_reward = 750
+          var mission_target = Vector3(100,0,100)
+          var mission_distance = 0.0
+          var mission_title = "FIRST DELIVERY"
+          var hud: CanvasLayer
+          var money_label: Label
+          var health_label: Label
+          var wanted_label: Label
+          var mission_label: Label
+          var ammo_label: Label
+          var speed_label: Label
+
+          func create_game_hud():
+              hud = CanvasLayer.new()
+              hud.name = "GameHUD"
+              add_child(hud)
+
+              var root = Control.new()
+              root.set_anchors_preset(Control.PRESET_FULL_RECT)
+              root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+              hud.add_child(root)
+
+              var top_panel = PanelContainer.new()
+              top_panel.position = Vector2(18,18)
+              top_panel.custom_minimum_size = Vector2(230,125)
+              top_panel.add_theme_stylebox_override(
+                  "panel",
+                  make_button_style(Color(0.025,0.055,0.07,0.78))
+              )
+              root.add_child(top_panel)
+
+              var info = VBoxContainer.new()
+              info.add_theme_constant_override("separation",7)
+              top_panel.add_child(info)
+
+              var title = Label.new()
+              title.text = "LOS CITY"
+              title.add_theme_font_size_override("font_size",20)
+              title.add_theme_color_override("font_color",Color(0.95,0.81,0.51))
+              info.add_child(title)
+
+              money_label = Label.new()
+              money_label.add_theme_font_size_override("font_size",17)
+              money_label.add_theme_color_override("font_color",Color(0.4,1,0.65))
+              info.add_child(money_label)
+
+              health_label = Label.new()
+              health_label.add_theme_font_size_override("font_size",15)
+              info.add_child(health_label)
+
+              wanted_label = Label.new()
+              wanted_label.add_theme_font_size_override("font_size",17)
+              wanted_label.add_theme_color_override("font_color",Color(1,0.75,0.3))
+              info.add_child(wanted_label)
+
+              mission_label = Label.new()
+              mission_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
+              mission_label.position = Vector2(-180,22)
+              mission_label.custom_minimum_size = Vector2(360,65)
+              mission_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+              mission_label.add_theme_font_size_override("font_size",17)
+              mission_label.add_theme_color_override("font_color",Color(1,0.9,0.67))
+              root.add_child(mission_label)
+
+              ammo_label = Label.new()
+              ammo_label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+              ammo_label.position = Vector2(-175,-85)
+              ammo_label.custom_minimum_size = Vector2(160,40)
+              ammo_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+              ammo_label.add_theme_font_size_override("font_size",20)
+              root.add_child(ammo_label)
+
+              speed_label = Label.new()
+              speed_label.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+              speed_label.position = Vector2(20,-55)
+              speed_label.add_theme_font_size_override("font_size",18)
+              root.add_child(speed_label)
+
+              update_hud()
+
+              print("GAME HUD CREATED")
+
+          func update_hud():
+              if hud == null:
+                  return
+
+              money_label.text = "MONEY: $ " + str(player_money)
+              health_label.text = "HEALTH: " + str(int(player_health)) + "%"
+              wanted_label.text = "WANTED: " + ("★".repeat(wanted_level) + "☆".repeat(5-wanted_level))
+
+              ammo_label.text = "AMMO: " + str(ammo) + " / " + str(reserve_ammo)
+
+              if vehicle_active:
+                  speed_label.text = "SPEED: " + str(int(abs(vehicle_speed)*4.0)) + " KM/H"
+              else:
+                  speed_label.text = "ON FOOT"
+
+              if mission_active:
+                  mission_label.text = mission_title + "\nDISTANCE: " + str(int(mission_distance)) + " M"
+              else:
+                  mission_label.text = "LOS CITY  |  FREE ROAM"
+
+          func start_mission():
+              if mission_active:
+                  return
+
+              mission_active = true
+              mission_title = "FIRST DELIVERY"
+              mission_reward = 750
+
+              var targets = [
+                  Vector3(100,0,100),
+                  Vector3(-120,0,80),
+                  Vector3(150,0,-110),
+                  Vector3(-100,0,-140)
+              ]
+
+              mission_target = targets[mission_completed % targets.size()]
+
+              print("MISSION STARTED: ",mission_title)
+
+          func update_mission(delta):
+              if not mission_active or player == null:
+                  return
+
+              mission_distance = player.global_position.distance_to(
+                  mission_target
+              )
+
+              if mission_distance < 5.0:
+                  complete_mission()
+
+          func complete_mission():
+              if not mission_active:
+                  return
+
+              mission_active = false
+              player_money += mission_reward
+              mission_completed += 1
+
+              print("MISSION COMPLETE")
+              print("REWARD: $",mission_reward)
+
+          func spend_money(amount: int):
+              if amount <= 0 or player_money < amount:
+                  return false
+
+              player_money -= amount
+              update_hud()
+              return true
+
+          func add_money(amount: int):
+              player_money += max(0,amount)
+              update_hud()
+
+          func buy_ammunition():
+              if spend_money(150):
+                  reserve_ammo += 60
+                  update_hud()
+
+          EOF
+
+      - name: Integrate Missions And HUD
+        run: |
+          python3 - <<'PY'
+          p = "game/scripts/main.gd"
+          s = open(p).read()
+
+          s = s.replace(
+              "activate_mobile_system()\n              print",
+              "activate_mobile_system()\n              create_game_hud()\n              start_mission()\n              print"
+          )
+
+          s = s.replace(
+              "update_police(delta)\n              update_weapon(delta)",
+              "update_police(delta)\n              update_mission(delta)\n              update_hud()\n              update_weapon(delta)"
+          )
+
+          open(p,"w").write(s)
+          PY
+
+      - name: Create Navigation And World Map
+        run: |
+          cat >> game/scripts/main.gd <<'EOF'
+
+          var map_viewport: SubViewport
+          var map_camera: Camera3D
+          var map_player_marker: ColorRect
+          var compass_label: Label
+          var map_enabled = true
+
+          func create_navigation_system():
+              if hud == null:
+                  return
+
+              var root = hud.get_child(0)
+
+              var map_panel = PanelContainer.new()
+              map_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+              map_panel.position = Vector2(-190,85)
+              map_panel.custom_minimum_size = Vector2(165,165)
+              map_panel.add_theme_stylebox_override(
+                  "panel",
+                  make_button_style(Color(0.025,0.055,0.07,0.9))
+              )
+              root.add_child(map_panel)
+
+              var map_stack = VBoxContainer.new()
+              map_panel.add_child(map_stack)
+
+              var map_title = Label.new()
+              map_title.text = "CITY MAP"
+              map_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+              map_title.add_theme_font_size_override("font_size",13)
+              map_stack.add_child(map_title)
+
+              map_viewport = SubViewport.new()
+              map_viewport.size = Vector2i(145,125)
+              map_viewport.transparent_bg = false
+              map_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+              map_viewport.world_3d = get_world_3d()
+              map_stack.add_child(map_viewport)
+
+              map_camera = Camera3D.new()
+              map_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+              map_camera.size = 100
+              map_camera.position = Vector3(0,90,0)
+              map_camera.rotation_degrees = Vector3(-90,0,0)
+              map_camera.current = true
+              map_viewport.add_child(map_camera)
+
+              map_player_marker = ColorRect.new()
+              map_player_marker.color = Color(0.2,1,0.6)
+              map_player_marker.size = Vector2(9,9)
+              map_player_marker.position = Vector2(68,58)
+              map_player_marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
+              map_stack.add_child(map_player_marker)
+
+              compass_label = Label.new()
+              compass_label.text = "N"
+              compass_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+              map_stack.add_child(compass_label)
+
+              print("NAVIGATION SYSTEM READY")
+
+          func update_navigation(delta):
+              if map_camera == null or player == null:
+                  return
+
+              map_camera.global_position = Vector3(
+                  player.global_position.x,
+                  90,
+                  player.global_position.z
+              )
+
+              map_camera.rotation.y = player.rotation.y
+
+              if compass_label:
+                  var heading = int(
+                      rad_to_deg(player.rotation.y)
+                  )
+                  compass_label.text = "HEADING: " + str((heading+360)%360) + "°"
+
+          func toggle_map():
+              if map_viewport:
+                  map_enabled = not map_enabled
+                  map_viewport.visible = map_enabled
+
+          func get_mission_direction():
+              if player == null:
+                  return "UNKNOWN"
+
+              var direction = mission_target-player.global_position
+              direction.y = 0
+
+              if direction.length() < 1:
+                  return "DESTINATION REACHED"
+
+              var angle = atan2(direction.x,-direction.z)
+              var degrees = wrapf(rad_to_deg(angle),0,360)
+
+              if degrees < 45 or degrees >= 315:
+                  return "NORTH"
+              elif degrees < 135:
+                  return "EAST"
+              elif degrees < 225:
+                  return "SOUTH"
+
+              return "WEST"
+
+          func teleport_to_safe_position():
+              if player == null:
+                  return
+
+              player.global_position = Vector3(0,2,0)
+              player.velocity = Vector3.ZERO
+
+              if vehicle_active:
+                  vehicle_active = false
+                  vehicle.visible = true
+                  vehicle.position = Vector3(5,1,5)
+                  player.visible = true
+
+              print("SAFE POSITION RESTORED")
+
+          EOF
+
+      - name: Integrate Navigation System
+        run: |
+          python3 - <<'PY'
+          p = "game/scripts/main.gd"
+          s = open(p).read()
+
+          s = s.replace(
+              "create_game_hud()\n              start_mission()",
+              "create_game_hud()\n              create_navigation_system()\n              start_mission()"
+          )
+
+          s = s.replace(
+              "update_mission(delta)\n              update_hud()",
+              "update_mission(delta)\n              update_navigation(delta)\n              update_hud()"
+          )
+
+          open(p,"w").write(s)
+          PY
+
+      - name: Add Advanced City Details
+        run: |
+          cat >> game/scripts/main.gd <<'EOF'
+
+          var mission_beacon: MeshInstance3D
+          var beacon_time = 0.0
+
+          func create_city_details():
+              create_street_lights()
+              create_city_trees()
+              create_neon_signs()
+              create_mission_beacon()
+              create_extra_environment()
+
+          func create_street_lights():
+              for x in range(-4,5):
+                  for z in range(-4,5):
+                      if abs(x) % 2 == 0 and abs(z) % 2 == 0:
+                          var pole = MeshInstance3D.new()
+                          var pole_mesh = CylinderMesh.new()
+                          pole_mesh.top_radius = 0.09
+                          pole_mesh.bottom_radius = 0.14
+                          pole_mesh.height = 7.0
+                          pole.mesh = pole_mesh
+                          pole.position = Vector3(x*24,3.5,z*24+7)
+                          pole.material_override = make_material(
+                              Color(0.12,0.17,0.22),0.7
+                          )
+                          add_child(pole)
+
+                          var lamp = MeshInstance3D.new()
+                          var lamp_mesh = SphereMesh.new()
+                          lamp_mesh.radius = 0.45
+                          lamp_mesh.height = 0.9
+                          lamp.mesh = lamp_mesh
+                          lamp.position = Vector3(x*24,7,z*24+7)
+                          lamp.material_override = make_material(
+                              Color(0.8,0.95,1.0),0.1,1.0
+                          )
+                          add_child(lamp)
+
+                          var light = OmniLight3D.new()
+                          light.position = Vector3(x*24,6.5,z*24+7)
+                          light.light_color = Color(0.55,0.75,1.0)
+                          light.light_energy = 1.2
+                          light.omni_range = 13
+                          add_child(light)
+
+          func create_city_trees():
+              for x in range(-5,6):
+                  for z in range(-5,6):
+                      if abs(x) < 2 or abs(z) < 2:
+                          continue
+
+                      if (x*7+z*3) % 3 == 0:
+                          var tree = Node3D.new()
+                          tree.position = Vector3(x*19,0,z*19)
+                          add_child(tree)
+
+                          var trunk = MeshInstance3D.new()
+                          var trunk_mesh = CylinderMesh.new()
+                          trunk_mesh.top_radius = 0.25
+                          trunk_mesh.bottom_radius = 0.38
+                          trunk_mesh.height = 3.0
+                          trunk.mesh = trunk_mesh
+                          trunk.position.y = 1.5
+                          trunk.material_override = make_material(
+                              Color(0.22,0.12,0.07)
+                          )
+                          tree.add_child(trunk)
+
+                          var leaves = MeshInstance3D.new()
+                          var leaves_mesh = SphereMesh.new()
+                          leaves_mesh.radius = 2.0
+                          leaves_mesh.height = 3.8
+                          leaves.mesh = leaves_mesh
+                          leaves.position.y = 4.0
+                          leaves.material_override = make_material(
+                              Color(0.035,0.25,0.12),0.85
+                          )
+                          tree.add_child(leaves)
+
+          func create_neon_signs():
+              var sign_colors = [
+                  Color(0.0,0.8,1.0),
+                  Color(1.0,0.1,0.45),
+                  Color(0.6,0.2,1.0),
+                  Color(1.0,0.65,0.05)
+              ]
+
+              for i in range(12):
+                  var sign = MeshInstance3D.new()
+                  var sign_mesh = BoxMesh.new()
+                  sign_mesh.size = Vector3(4.5,1.0,0.18)
+                  sign.mesh = sign_mesh
+
+                  var x = float((i%4)-2)*27.0
+                  var z = float(int(i/4)-1)*35.0
+                  sign.position = Vector3(x,9,z)
+
+                  sign.material_override = make_material(
+                      sign_colors[i%sign_colors.size()],0.15,1.8
+                  )
+                  add_child(sign)
+
+          func create_mission_beacon():
+              mission_beacon = MeshInstance3D.new()
+              var beacon_mesh = CylinderMesh.new()
+              beacon_mesh.top_radius = 0.15
+              beacon_mesh.bottom_radius = 2.2
+              beacon_mesh.height = 0.12
+              mission_beacon.mesh = beacon_mesh
+              mission_beacon.material_override = make_material(
+                  Color(0.0,0.85,1.0),0.15,2.0
+              )
+              add_child(mission_beacon)
+
+          func update_mission_beacon(delta):
+              beacon_time += delta
+
+              if mission_beacon == null or player == null:
+                  return
+
+              mission_beacon.global_position = Vector3(
+                  mission_target.x,
+                  0.12 + sin(beacon_time*2.5)*0.08,
+                  mission_target.z
+              )
+
+              mission_beacon.rotation.y += delta*0.8
+
+          func create_extra_environment():
+              var world_environment = WorldEnvironment.new()
+              var environment = Environment.new()
+              environment.background_mode = Environment.BG_SKY
+
+              var sky = Sky.new()
+              var sky_material = ProceduralSkyMaterial.new()
+              sky_material.sky_top_color = Color(0.025,0.055,0.13)
+              sky_material.sky_horizon_color = Color(0.18,0.25,0.38)
+              sky_material.ground_bottom_color = Color(0.025,0.035,0.05)
+              sky_material.ground_horizon_color = Color(0.12,0.15,0.2)
+              sky.sky_material = sky_material
+
+              environment.sky = sky
+              environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+              environment.ambient_light_color = Color(0.35,0.42,0.58)
+              environment.ambient_light_energy = 0.7
+              environment.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+
+              world_environment.environment = environment
+              add_child(world_environment)
+
+          func make_material(color: Color, roughness_value=0.8, emission_value=0.0):
+              var material = StandardMaterial3D.new()
+              material.albedo_color = color
+              material.roughness = roughness_value
+
+              if emission_value > 0.0:
+                  material.emission_enabled = true
+                  material.emission = color
+                  material.emission_energy_multiplier = emission_value
+
+              return material
+
+          EOF
+
+      - name: Integrate City Details And Fix Script
+        run: |
+          python3 - <<'PY'
+          p = "game/scripts/main.gd"
+          s = open(p).read()
+
+          s = s.replace(
+              "create_game_hud()\n              create_navigation_system()",
+              "create_game_hud()\n              create_city_details()\n              create_navigation_system()"
+          )
+
+          s = s.replace(
+              "update_navigation(delta)\n              update_hud()",
+              "update_navigation(delta)\n              update_mission_beacon(delta)\n              update_hud()"
+          )
+
+          s = s.replace(
+              '              officer.set_script(load("res://scripts/police.gd")) if false else null\n',
+              ''
+          )
+
+          open(p,"w").write(s)
+          PY
+
+      - name: Configure Android Export
+        run: |
+          mkdir -p game
+          cat > game/export_presets.cfg <<'EOF'
+          [preset.0]
+
+          name="Android"
+          platform="Android"
+          runnable=true
+          dedicated_server=false
+          custom_features=""
+          export_filter="all_resources"
+          include_filter=""
+          exclude_filter=""
+          export_path="../build/CityAction.apk"
+          encryption_include_filters=""
+          encryption_exclude_filters=""
+          encrypt_pck=false
+          encrypt_directory=false
+          script_export_mode=2
+
+          [preset.0.options]
+
+          custom_template/debug=""
+          custom_template/release=""
+
+          gradle_build/use_gradle_build=false
+
+          architectures/armeabi-v7a=false
+          architectures/arm64-v8a=true
+          architectures/x86=false
+          architectures/x86_64=false
+
+          package/unique_name="com.cityaction.game"
+          package/name="City Action"
+          package/signed=true
+          package/app_category=2
+          package/allow_backup=false
+          version/code=1
+          version/name="1.0"
+
+          screen/immersive_mode=true
+          screen/orientation=1
+          screen/support_small=true
+          screen/support_normal=true
+          screen/support_large=true
+          screen/support_xlarge=true
+
+          permissions/internet=true
+          permissions/access_network_state=true
+          EOF
+
+      - name: Setup Java And Android SDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android Build Components
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Install Godot Android Templates
+        run: |
+          godot --headless --editor --path game --install-android-build-template --quit
+
+      - name: Validate Game Project
+        run: |
+          godot --headless --editor --path game --import --quit
+          godot --headless --path game --editor --quit
+
+      - name: Build Android APK
+        run: |
+          mkdir -p build
+          godot --headless --path game --export-debug "Android" build/CityAction.apk
+          test -s build/CityAction.apk
+
+      - name: Upload Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CityAction-Android-APK
+          path: build/CityAction.apk
+          if-no-files-found: error
+          retention-days: 30
